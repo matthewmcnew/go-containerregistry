@@ -915,6 +915,41 @@ func TestWriteWithErrors(t *testing.T) {
 	}
 }
 
+func TestDockerhubScopes(t *testing.T) {
+	src, err := name.ParseReference("busybox")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rl, err := random.Layer(1024, types.DockerLayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ml := &MountableLayer{
+		Layer:     rl,
+		Reference: src,
+	}
+	want := src.Scope(transport.PullScope)
+
+	for _, s := range []string{
+		"jonjohnson/busybox",
+		"docker.io/jonjohnson/busybox",
+		"index.docker.io/jonjohnson/busybox",
+	} {
+		dst, err := name.ParseReference(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		scopes := scopesForUploadingImage(dst.Context(), []v1.Layer{ml})
+
+		if len(scopes) != 2 {
+			t.Errorf("Should have two scopes (src and dst), got %d", len(scopes))
+		} else if diff := cmp.Diff(want, scopes[1]); diff != "" {
+			t.Errorf("TestDockerhubScopes %q: (-want +got) = %v", s, diff)
+		}
+	}
+}
+
 func TestScopesForUploadingImage(t *testing.T) {
 	referenceToUpload, err := name.NewTag("example.com/sample/sample:latest", name.WeakValidation)
 	if err != nil {
@@ -1359,6 +1394,9 @@ func TestNestedIndex(t *testing.T) {
 	}
 	parent := mutate.AppendManifests(empty.Index, mutate.IndexAddendum{
 		Add: child,
+		Descriptor: v1.Descriptor{
+			URLs: []string{"example.com/url"},
+		},
 	})
 
 	if err := WriteIndex(srcRef, parent); err != nil {
@@ -1371,6 +1409,29 @@ func TestNestedIndex(t *testing.T) {
 
 	if err := validate.Index(pulled); err != nil {
 		t.Fatalf("validate.Index: %v", err)
+	}
+
+	digest, err := child.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pulledChild, err := pulled.ImageIndex(digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	desc, err := partial.Descriptor(pulledChild)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(desc.URLs) != 1 {
+		t.Fatalf("expected url for pulledChild")
+	}
+
+	if want, got := "example.com/url", desc.URLs[0]; want != got {
+		t.Errorf("pulledChild.urls[0] = %s != %s", got, want)
 	}
 }
 
